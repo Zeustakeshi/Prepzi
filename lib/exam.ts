@@ -111,6 +111,9 @@ export type ActiveAttempt = {
   answers: Record<string, UserAnswer>;
   flaggedQuestionIds: string[];
   examSnapshot?: Exam;
+  isPaused?: boolean;
+  pausedAt?: number;
+  remainingSeconds?: number;
 };
 
 export const STORAGE_KEYS = {

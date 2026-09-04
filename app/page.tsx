@@ -95,8 +95,11 @@ export default function Home() {
         setExam(restoredExam);
         const restored = { ...storedActive, flaggedQuestionIds: storedActive.flaggedQuestionIds || [] };
         setActive(restored);
-        setSecondsLeft(Math.max(0, Math.ceil((storedActive.deadline - Date.now()) / 1000)));
-        setView("quiz");
+        const restoredSeconds = storedActive.isPaused
+          ? storedActive.remainingSeconds ?? Math.max(0, Math.ceil((storedActive.deadline - Date.now()) / 1000))
+          : Math.max(0, Math.ceil((storedActive.deadline - Date.now()) / 1000));
+        setSecondsLeft(restoredSeconds);
+        setView(storedActive.isPaused ? "home" : "quiz");
       }
     }
   }, []);
@@ -169,6 +172,28 @@ export default function Home() {
     localStorage.setItem(STORAGE_KEYS.active, JSON.stringify(next));
   };
 
+  const pauseAttempt = (exitToHome = false) => {
+    if (!active) return;
+    const remainingSeconds = active.isPaused
+      ? active.remainingSeconds ?? secondsLeft
+      : Math.max(0, Math.ceil((active.deadline - Date.now()) / 1000));
+    const next: ActiveAttempt = { ...active, isPaused: true, pausedAt: Date.now(), remainingSeconds };
+    setSecondsLeft(remainingSeconds);
+    setActive(next);
+    localStorage.setItem(STORAGE_KEYS.active, JSON.stringify(next));
+    if (exitToHome) setView("home");
+  };
+
+  const resumeAttempt = () => {
+    if (!active) return;
+    const remainingSeconds = Math.max(0, active.remainingSeconds ?? secondsLeft);
+    const next: ActiveAttempt = { ...active, deadline: Date.now() + remainingSeconds * 1000, isPaused: false, pausedAt: undefined, remainingSeconds: undefined };
+    setActive(next);
+    setSecondsLeft(remainingSeconds);
+    localStorage.setItem(STORAGE_KEYS.active, JSON.stringify(next));
+    setView("quiz");
+  };
+
   const submitExam = useCallback(async (auto = false) => {
     if (!exam || !active || submitting) return;
     const essayQuestions = exam.questions.filter((question) => question.type === "essay");
@@ -229,7 +254,7 @@ export default function Home() {
   }, [active, attempts, config.configured, exam, savedExams, submitting, wrongQuestions]);
 
   useEffect(() => {
-    if (view !== "quiz" || !active) return;
+    if (view !== "quiz" || !active || active.isPaused) return;
     const tick = () => { const next = Math.max(0, Math.ceil((active.deadline - Date.now()) / 1000)); setSecondsLeft(next); if (next === 0) void submitExam(true); };
     tick(); const timer = window.setInterval(tick, 1000); return () => window.clearInterval(timer);
   }, [active, submitExam, view]);
@@ -257,7 +282,8 @@ export default function Home() {
   };
 
   const removeConfig = async () => { await fetch("/api/config", { method: "DELETE" }); setConfig({ configured: false }); setModel(""); setApiKey(""); setConfigStatus("Đã xóa API key."); };
-  const goHome = () => { setView("home"); setResult(null); setImportError(""); };
+  const goHome = () => { if (view === "quiz" && active) { pauseAttempt(true); return; } setView("home"); setResult(null); setImportError(""); };
+  const openSettings = () => { if (view === "quiz" && active && !active.isPaused) pauseAttempt(false); setShowConfig(true); setConfigStatus(""); };
   const deleteExam = (id: string) => { persistExams(savedExams.filter((item) => item.id !== id)); persistAttempts(attempts.filter((item) => item.examId !== id)); };
 
   const answeredCount = active && exam ? exam.questions.filter((question) => { const answer = active.answers[question.id]; return Array.isArray(answer) ? answer.length > 0 : Boolean(answer?.trim()); }).length : 0;
@@ -271,11 +297,15 @@ export default function Home() {
         <div className="navActions">
           {config.configured && <span className="providerPill"><i />{config.provider} · {config.model}</span>}
           <button className="textButton" onClick={goHome}>Ngân hàng đề</button>
-          <button className="iconButton" onClick={() => { setShowConfig(true); setConfigStatus(""); }} aria-label="Cấu hình AI">⚙</button>
+          <button className="iconButton" onClick={openSettings} aria-label="Cấu hình AI">⚙</button>
         </div>
       </nav>
 
       {view === "home" && <>
+        {active && exam && <section className="resumeBanner">
+          <div><span>BÀI ĐANG TẠM DỪNG</span><h2>{exam.title}</h2><p>{answeredCount}/{exam.questions.length} câu đã trả lời · còn {formatTime(secondsLeft)}</p></div>
+          <button className="practiceButton" onClick={resumeAttempt}>Tiếp tục bài <span>→</span></button>
+        </section>}
         <section className="hero"><div className="eyebrow"><i /> HỌC THEO CÁCH CỦA BẠN</div><h1>Biến ghi chú thành<br/><em>một bài ôn tập.</em></h1><p>Dán đề dạng JSON, làm bài ngay và để AI hỗ trợ chấm phần tự luận theo đúng ý nghĩa.</p></section>
         <section className="importCard">
           <div className="cardTop"><div><span className="step">01</span><h2>Nhập nội dung đề</h2></div><button className="sampleButton" onClick={() => { setJson(SAMPLE); setImportError(""); }}>Dùng JSON mẫu</button></div>
@@ -312,6 +342,7 @@ export default function Home() {
           <div className="progressText"><span>Tiến độ</span><b>{answeredCount}/{exam.questions.length}</b></div><div className="progressBar"><i style={{ width: `${(answeredCount / exam.questions.length) * 100}%` }} /></div>
           <div className="flagSummary">⚑ {active.flaggedQuestionIds?.length || 0} câu đã gắn cờ</div>
           <div className="questionMap">{exam.questions.map((question, index) => { const answer = active.answers[question.id]; const done = Array.isArray(answer) ? answer.length > 0 : Boolean(answer?.trim()); const flagged = active.flaggedQuestionIds?.includes(question.id); return <button key={question.id} onClick={() => setCurrentIndex(index)} aria-label={`Câu ${index + 1}${flagged ? ", đã gắn cờ" : ""}`} className={`${index === currentIndex ? "current" : ""} ${done ? "done" : ""} ${flagged ? "flagged" : ""}`}>{index + 1}{flagged && <i>⚑</i>}</button>; })}</div>
+          <div className="quizTools"><button onClick={() => pauseAttempt(false)}>Ⅱ Tạm dừng</button><button onClick={openSettings}>⚙ Cài đặt</button><button className="exitButton" onClick={() => pauseAttempt(true)}>Thoát</button></div>
           <button className="submitButton" onClick={() => void submitExam(false)} disabled={submitting}>{submitting ? "AI đang chấm…" : "Nộp bài"}</button>{submitError && <p className="sideError">{submitError}</p>}
         </aside>
         <div className="questionStage">
@@ -324,6 +355,12 @@ export default function Home() {
           <div className="quizNav"><button onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0}>← Câu trước</button><button className="nextButton" onClick={() => currentIndex === exam.questions.length - 1 ? void submitExam(false) : setCurrentIndex(currentIndex + 1)}>{currentIndex === exam.questions.length - 1 ? "Nộp bài" : "Câu tiếp →"}</button></div>
         </div>
       </section>}
+
+      {view === "quiz" && active?.isPaused && !showConfig && <div className="modalBackdrop pauseBackdrop" role="presentation"><section className="modal pauseModal" role="dialog" aria-modal="true" aria-labelledby="pause-title">
+        <div className="pauseIcon">Ⅱ</div><span className="modalEyebrow">BÀI LÀM ĐÃ ĐƯỢC LƯU</span><h2 id="pause-title">Bạn đang tạm dừng</h2><p>Đồng hồ đã dừng ở {formatTime(secondsLeft)}. Toàn bộ câu trả lời hiện tại được lưu trên thiết bị.</p>
+        <button className="primaryButton fullButton" onClick={resumeAttempt}>Tiếp tục làm bài <span>→</span></button>
+        <button className="secondaryButton fullButton pauseExit" onClick={() => setView("home")}>Thoát về trang chủ</button>
+      </section></div>}
 
       {view === "result" && result && exam && <section className="resultPage">
         <div className="resultHero"><div><span>KẾT QUẢ BÀI ÔN</span><h1>{result.percentage}<small>%</small></h1></div><div className="resultCopy"><h2>{result.percentage >= 80 ? "Rất tốt — bạn đã nắm chắc phần lớn nội dung." : result.percentage >= 50 ? "Khá ổn — ôn thêm những ý còn thiếu nhé." : "Cứ tiếp tục — mỗi lần làm là một lần nhớ lâu hơn."}</h2><p>{result.score.toFixed(1)} / {result.maxScore} điểm · {exam.title}</p><button className="primaryButton" onClick={() => requestStart(exam, result.examId)}>Làm lại <span>→</span></button></div></div>
